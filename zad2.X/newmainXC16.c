@@ -1,0 +1,143 @@
+#include "xc.h"
+#include "libpic30.h"
+#include "buttons.h"
+#include "lcd.h"
+#include "adc.h"
+
+#pragma config POSCMOD = XT
+#pragma config OSCIOFNC = ON
+#pragma config FCKSM = CSDCMD
+#pragma config FNOSC = PRI
+#pragma config IESO = ON
+#pragma config WDTPS = PS32768
+#pragma config FWPSA = PR128
+#pragma config WINDIS = ON
+#pragma config FWDTEN = ON
+#pragma config ICS = PGx2
+#pragma config GWRP = OFF
+#pragma config GCP = OFF
+#pragma config JTAGEN = OFF
+
+#define NUM_PROGRAMS 2
+#define NUM_SPEED_LEVELS 5
+
+unsigned char current_program = 0;
+
+void debounce_delay(void) {
+    __delay32(40000); // debounce delay
+}
+
+void init(void) {
+    // ADC setup
+    ADC_SetConfiguration(ADC_CONFIGURATION_DEFAULT);
+    ADC_ChannelEnable(ADC_CHANNEL_POTENTIOMETER);
+
+    // Buttons
+    BUTTON_Enable(BUTTON_S3); // Next
+    BUTTON_Enable(BUTTON_S4); // Previous
+
+    // LCD
+    LCD_Initialize();
+    LCD_ClearScreen();
+    LCD_CursorEnable(false);
+
+    // LEDs as output
+    TRISA = 0x0000;
+    LATA = 0x0000;
+}
+
+int read_adc(void) {
+    uint16_t val = ADC_Read10bit(ADC_CHANNEL_POTENTIOMETER);
+    return (val != 0xFFFF) ? val : -1;
+}
+
+int get_speed_level(int adc_val) {
+    if (adc_val < 0) return 0;
+    return (adc_val * NUM_SPEED_LEVELS) / 1024;
+}
+
+void lcd_display_status(int program, int speed_level) {
+    LCD_ClearScreen();
+
+    char buf[32];
+    sprintf(buf, "Program: %d", program + 1);
+    LCD_PutString(buf, strlen(buf));
+    LCD_PutChar('\n');
+
+    sprintf(buf, "Speed Lvl: %d", speed_level + 1);
+    LCD_PutString(buf, strlen(buf));
+}
+
+void next_program(void) {
+    current_program = (current_program + 1) % NUM_PROGRAMS;
+}
+
+void prev_program(void) {
+    current_program = (current_program == 0) ? NUM_PROGRAMS - 1 : current_program - 1;
+}
+
+void program1(int delay_level) {
+    static uint8_t counter = 0;
+    LATA = counter;
+    counter++;
+    __delay32(120000 * (delay_level + 1));
+}
+
+void program2(int delay_level) {
+    static uint8_t position = 0;
+    static int direction = 1; // 1 = right, -1 = left
+
+    // Generate 3-bit snake pattern
+    LATA = 0b00000111 << position;
+
+    __delay32(120000 * (delay_level + 1));
+
+    position += direction;
+    if (position == 5 || position == 0) {
+        direction = -direction;
+    }
+}
+
+int main(void) {
+    init();
+
+    unsigned char prev_s3 = 0;
+    unsigned char prev_s4 = 0;
+
+    while (1) {
+        int adc_val = read_adc();
+        int speed_level = get_speed_level(adc_val);
+
+        lcd_display_status(current_program, speed_level);
+
+        unsigned char s3 = BUTTON_IsPressed(BUTTON_S3);
+        unsigned char s4 = BUTTON_IsPressed(BUTTON_S4);
+
+        if (!prev_s3 && s3) {
+            debounce_delay();
+            if (BUTTON_IsPressed(BUTTON_S3)) {
+                next_program();
+            }
+        }
+
+        if (!prev_s4 && s4) {
+            debounce_delay();
+            if (BUTTON_IsPressed(BUTTON_S4)) {
+                prev_program();
+            }
+        }
+
+        prev_s3 = s3;
+        prev_s4 = s4;
+
+        switch (current_program) {
+            case 0:
+                program1(speed_level);
+                break;
+            case 1:
+                program2(speed_level);
+                break;
+        }
+    }
+    return 0;
+}
